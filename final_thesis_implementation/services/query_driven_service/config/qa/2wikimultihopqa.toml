@@ -1,0 +1,102 @@
+# Query-Driven GraphRAG — text QA adaptation: 2wikimultihopqa
+#
+# Fair QA protocol:
+#   question -> query pattern -> retrieve from full Wiki corpus
+#   -> extraction -> graph -> inference -> final answer
+#
+# Gold/reference answers are used ONLY by evaluation.
+
+[runtime]
+operation = "pipeline"
+output_root = "../../../../outputs/query_driven/qa/2wikimultihopqa"
+cache_root = "../../cache/qa/2wikimultihopqa"
+resume = true
+overwrite = false
+concurrency = 8
+max_refinement_iterations = 5
+initial_entity_count = 2
+table_entity_count = 1
+
+[logging]
+level = "INFO"
+json = false
+colors = true
+
+[dataset]
+format = "qa"
+name = "2wikimultihopqa"
+questions = "../../../../data/processed/benchmarks/wiki_qa/2wikimultihopqa.jsonl"
+corpus_root = "../../../../data/processed/corpora/wiki"
+corpus_format = "jsonl"
+corpus_file = "wiki_dump.jsonl"
+
+qid_field = "query_id"
+question_field = "query"
+
+# These are evaluation-only fields. The service must not expose them
+# to pattern/retrieval/extraction/graph/inference.
+answer_field = "answer"
+
+document_id_field = "id"
+document_content_field = "contents"
+
+[text_model]
+kind = "openai_compatible"
+endpoint = "http://127.0.0.1:4000/v1/chat/completions"
+model = "qwen-chat"
+api_key_env = ""
+temperature = 0.0
+top_p = 1.0
+max_tokens = 
+timeout_seconds = 120
+
+[embedding]
+enabled = true
+endpoint = "http://127.0.0.1:4000/v1/embeddings"
+model = "qwen-embed"
+cache_dir = "../../cache/qa/2wikimultihopqa/embeddings"
+timeout_seconds = 120
+
+[retrieval]
+enabled = true
+source = "corpus_root"
+kind = "agent"
+
+use_query_pattern = true
+top_k = 20
+
+# Leakage guard: none of these fields may be used before evaluation.
+forbid_gold_fields = [
+    "answer",
+    "answers",
+    "gold_answer",
+    "gold_answers",
+    "supporting_facts",
+    "positive_ctxs",
+    "gold_ids",
+    "gold_docs",
+]
+
+[vision]
+enabled = false
+
+[image_selector]
+kind = "first"
+
+[clip]
+enabled = false
+
+[evaluation]
+enabled = true
+kind = "answer_qa"
+
+# Exact field names may be normalized per dataset loader.
+gold_field = "answer"
+prediction_field = "answer"
+
+# Appropriate for short/normal QA answers, unlike BRIGHT's retrieval evaluation.
+metrics = ["exact_match", "token_f1"]
+
+# Optional model-based semantic judge can be added later, but deterministic
+# metrics should remain the primary reproducible metrics.
+llm_judge = false

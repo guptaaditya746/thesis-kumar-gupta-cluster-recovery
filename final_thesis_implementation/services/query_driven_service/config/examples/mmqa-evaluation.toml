@@ -1,0 +1,34 @@
+[runtime]
+operation = "evaluate"
+output_root = "../../../../outputs/query_driven/evaluation"
+cache_root = "../../cache/evaluation"
+resume = true
+overwrite = false
+concurrency = 1
+
+[logging]
+level = "INFO"
+json = false
+colors = true
+
+[dataset]
+format = "mmqa"
+
+[text_model]
+
+[embedding]
+enabled = false
+
+[vision]
+enabled = false
+
+[image_selector]
+kind = "first"
+
+[clip]
+enabled = false
+
+[evaluation]
+enabled = true
+prediction_file = "../../../../outputs/query_driven/mmqa/predictions.json"
+gold_file = "../../../../data/multimodalqa_final_dataset_pipeline_camera_ready_MMQA_dev.jsonl"

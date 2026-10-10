@@ -1,0 +1,11 @@
+.venv/
+.cuda-link/
+.run/
+logs/current/*.log
+logs/slurm-*.out
+logs/slurm-*.err
+__pycache__/
+*.pyc
+
+
+codex-resume.txt

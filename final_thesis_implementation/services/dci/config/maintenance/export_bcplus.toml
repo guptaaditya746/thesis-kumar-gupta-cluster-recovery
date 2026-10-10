@@ -1,0 +1,10 @@
+version = 1
+operation = "export_bcplus"
+
+[logging]
+level = "INFO"
+json = false
+
+[data]
+source_dir = "../../data/raw/corpora/dci-agent-corpus/browsecomp_plus"
+output_dir = "../../data/processed/corpora/browsecomp_plus"

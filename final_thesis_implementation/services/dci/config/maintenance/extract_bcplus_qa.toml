@@ -1,0 +1,11 @@
+version = 1
+operation = "extract_bcplus_qa"
+
+[logging]
+level = "INFO"
+json = false
+
+[data]
+parquet_dir = "../../data/raw/benchmarks/dci-bench/data/browsecomp-plus"
+output = "../../data/processed/benchmarks/browsecomp_plus/bcplus_qa.jsonl"
+no_decrypt = false

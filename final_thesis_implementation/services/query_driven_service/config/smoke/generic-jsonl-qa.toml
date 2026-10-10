@@ -1,0 +1,81 @@
+# Tiny self-contained QA smoke test for a configurable JSONL corpus schema.
+
+[runtime]
+operation = "pipeline"
+output_root = "../../outputs/smoke/generic-jsonl-qa"
+cache_root = "../../cache/smoke/generic-jsonl-qa"
+resume = false
+overwrite = true
+concurrency = 1
+max_questions = 1
+max_refinement_iterations = 5
+initial_entity_count = 2
+table_entity_count = 1
+
+[logging]
+level = "INFO"
+json = false
+colors = true
+
+[dataset]
+format = "qa"
+name = "generic-jsonl-smoke"
+questions = "../../fixtures/smoke/generic-jsonl/questions.jsonl"
+corpus_root = "../../fixtures/smoke/generic-jsonl/corpus"
+corpus_format = "jsonl"
+corpus_file = "documents.jsonl"
+qid_field = "qid"
+question_field = "question"
+answer_field = "answer"
+document_id_field = "doc_key"
+document_content_field = "body"
+
+[text_model]
+kind = "openai_compatible"
+endpoint = "http://127.0.0.1:4000/v1/chat/completions"
+model = "qwen-chat"
+api_key_env = ""
+temperature = 0.0
+top_p = 1.0
+max_tokens = 
+timeout_seconds = 120
+
+[embedding]
+enabled = true
+endpoint = "http://127.0.0.1:4000/v1/embeddings"
+model = "qwen-embed"
+cache_dir = "../../cache/smoke/generic-jsonl-qa/embeddings"
+timeout_seconds = 120
+
+[agent]
+max_output_tokens = 
+context_management_level = "level5"
+
+[retrieval]
+enabled = true
+source = "corpus_root"
+kind = "agent"
+use_query_pattern = true
+top_k = 5
+max_search_turns = 8
+max_search_seconds = 90
+finalization_grace_seconds = 20
+show_tools = true
+forbid_gold_fields = ["answer", "answers", "gold_answer", "gold_answers"]
+
+[vision]
+enabled = false
+
+[image_selector]
+kind = "first"
+
+[clip]
+enabled = false
+
+[evaluation]
+enabled = true
+kind = "answer_qa"
+gold_field = "answer"
+prediction_field = "answer"
+metrics = ["exact_match", "token_f1"]
+llm_judge = false

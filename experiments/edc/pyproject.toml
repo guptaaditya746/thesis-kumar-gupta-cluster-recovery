@@ -1,0 +1,56 @@
+[project]
+name = "edc"
+version = "0.1.0"
+requires-python = "==3.9.*"
+dependencies = [
+  # Core AI / ML
+  "torch==2.2.2",
+  "torchvision==0.17.2",
+  "torchaudio==2.2.2",
+  "transformers==4.43.4",
+  "datasets==2.12.0",
+  "accelerate==0.29.1",
+  "peft==0.10.0",
+  "sentence-transformers==3.0.1",
+  "evaluate==0.4.1",
+  "xformers==0.0.25.post1",
+  "openai==1.16.2",
+
+  # Data & Science
+  "numpy==1.26.4",
+  "pandas==2.2.1",
+  "scipy==1.13.1",
+  "scikit-learn==1.5.0",
+  "networkx==3.1",
+  "pyarrow==14.0.2",
+
+  # Web / API / Dashboards
+  "dash==2.17.0",
+  "plotly==5.22.0",
+  "flask==3.0.3",
+  "httpx==0.27.0",
+  "aiohttp==3.9.3",
+  "beautifulsoup4==4.12.3",
+
+  # Utils
+  "tqdm==4.65.0",
+  "pyyaml==6.0.1",
+  "pydantic==2.6.4",
+  "nltk==3.8.1",
+  "pillow==10.2.0",
+  "psutil==5.9.8",
+  "jupyter-client==8.6.1",
+  "ipython==8.18.1",
+]
+
+# Tell uv where to find the PyTorch CUDA 12.1 wheels
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+# Tell poetry where to find the PyTorch CUDA 12.1 wheels
+[[tool.poetry.source]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+priority = "explicit"

@@ -1,0 +1,78 @@
+# Local environments and secrets
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+.envrc
+.venv/
+venv/
+env/
+
+# Python caches, build products, and package metadata
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# Test, coverage, and profiling artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.prof
+*.trace
+
+# Generated runtime and benchmark artifacts
+outputs/
+logs/
+logs*/
+data/
+corpus/
+tmp/
+*.log
+*.jsonl
+digest.txt
+CODEX_HANDOFF.md
+
+# Dependency lock data is reproducible from pyproject.toml and disproportionately
+# large for a code-review context window.
+uv.lock
+
+# Bundled/generated archives and binary artifacts
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.7z
+*.bin
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated documentation output
+assets/docs/_build/
+site/
+
+# Editor, assistant, and OS metadata
+.idea/
+.vscode/
+.claude/
+.codex/
+.cursor/
+.DS_Store
+Thumbs.db
+
+# Intentionally retained for review because no rule above matches them:
+# src/, tests/, scripts/, config/*.toml, prompts/, assets/docs/*.md,
+# README.md, SERVICE.md, pyproject.toml, setup.sh, and provenance/licensing files.

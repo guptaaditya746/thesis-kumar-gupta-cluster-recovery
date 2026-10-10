@@ -1,0 +1,20 @@
+Thesis Data Observatory v0.1.0
+
+Runtime:
+- Streamlit user interface
+- DuckDB metadata catalog
+- Pandas/PyArrow data previews
+- Plotly visualizations
+- Typer/Rich command-line interface
+
+Primary commands:
+- data-dashboard config-check
+- data-dashboard catalog build
+- data-dashboard status
+- data-dashboard validate
+- data-dashboard serve
+
+Safety contract:
+- Reads only from configured processed/manifests roots
+- Writes catalog and reports only to configured output root
+- No mutation, upload, delete, rename, or reprocessing actions

@@ -1,0 +1,38 @@
+Answer the following question using only documents in the local corpus at @{{ corpus_dir }}.
+Do not use web search and do not modify corpus files.
+
+{% if single_jsonl_file %}
+CORPUS LAYOUT:
+- The corpus contains one large JSONL file: `{{ single_jsonl_file }}`.
+- Do not search for `.txt`, `.md`, or `.json` files; they do not exist here.
+- Do not use the dedicated Read or Grep tools on this file. Do not use `cat`, `head`, `tail`, or any command that dumps the whole JSONL file.
+- Search only through the Bash tool with targeted, output-bounded `rg` commands, for example:
+  `timeout 30s rg -n -i -F -m 5 -C 2 --max-columns 4000 --max-columns-preview -- "search phrase" {{ single_jsonl_shell }}`
+- Begin with the shortest distinctive named entity or title from the question, then search related entities needed for multi-hop reasoning.
+- Search the entity itself, not a natural-language relation around it. For example, search a quoted film title rather than a phrase such as `star of <film title>`.
+- Keep every command output small. Never request billions of lines or the entire file.
+{% else %}
+CORPUS LAYOUT:
+{% for entry in corpus_entries %}
+- `{{ entry.name }}`{% if entry.is_dir %} (directory){% endif %}
+{% endfor %}
+{% if corpus_entries_truncated %}
+- Additional entries exist; use targeted Find/Ls/Grep rather than dumping the entire corpus.
+{% endif %}
+- Use local Read, Grep, Find, Ls, or bounded Bash searches as appropriate.
+{% endif %}
+
+SEARCH REQUIREMENTS:
+1. Search for direct evidence; do not guess from general knowledge.
+2. For multi-hop questions, identify and verify every link needed to reach the answer.
+3. If a search fails, change the search terms instead of repeating the same tool call.
+4. Continue until you have an evidence-supported answer; never stop after merely announcing another search.
+5. The final answer must appear in the tool evidence. Never substitute an answer from memory that is absent from the retrieved text.
+6. Before answering, silently verify every hop against the retrieved sentences and select the candidate explicitly connected by that evidence.
+7. Prefer a candidate connected within the same article/context block as the original query entity. Do not replace it with an arbitrary result from a later broad entity search.
+
+QUESTION:
+{{ question }}
+
+Return only the concise answer in this exact form:
+Exact Answer: <answer>

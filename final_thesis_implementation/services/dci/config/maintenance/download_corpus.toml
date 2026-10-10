@@ -1,0 +1,10 @@
+version = 1
+operation = "download_corpus"
+
+[logging]
+level = "INFO"
+json = false
+
+[data]
+local_dir = "../../data/raw/corpora/dci-agent-corpus"
+skip_export = true

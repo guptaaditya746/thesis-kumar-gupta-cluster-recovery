@@ -1,0 +1,40 @@
+version = 1
+operation = "benchmark"
+
+[logging]
+level = "DEBUG"
+json = false
+
+[pi]
+# Paths are resolved relative to services/dci, even for configs in subdirectories.
+package_dir = "../pi_runtime/pi-mono/packages/coding-agent"
+agent_dir = "../pi_runtime/pi-mono/.pi/agent"
+
+# Your working Pi -> LiteLLM/vLLM setup.
+provider = "vllm"
+model = "qwen-chat"
+tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
+max_turns = 300
+thinking = "high"
+context_management_level = "level3"
+node_max_old_space_size_mb = 8192
+extra_args = []
+
+[benchmark]
+mode = "qa"
+prompt_template = "config/prompts/answer_qa.j2"
+dataset = "../../data/processed/benchmarks/browsecomp_plus/bcplus_qa.jsonl"
+corpus_dir = "../../data/processed/corpora/browsecomp_plus"
+output_root = "../../outputs/dci/answer_qa/browsecomp_plus_jinja"
+max_concurrency = 1
+# limit = 10
+
+[evaluation]
+# Judge uses the configured OpenAI-compatible Chat Completions endpoint.
+judge_model = "qwen-chat"
+judge_base_url = "http://127.0.0.1:4000/v1"
+judge_api_key_env = ""
+judge_timeout_seconds = 120
+judge_input_price_per_1m = 0.20
+judge_cached_input_price_per_1m = 0.02
+judge_output_price_per_1m = 1.25

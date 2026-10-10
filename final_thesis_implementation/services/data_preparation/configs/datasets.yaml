@@ -1,0 +1,284 @@
+schema_version: 1
+
+# This file assumes the service is installed at:
+#   <workspace>/services/data_preparation/
+# Paths are resolved from the service root, not from the current shell directory.
+workspace_root: ../..
+data_root: data
+
+repositories:
+  benchmarks:
+    repo_id: DCI-Agent/dci-bench
+    repo_type: dataset
+    raw_dir: raw/benchmarks/dci-bench
+  corpora:
+    repo_id: DCI-Agent/corpus
+    repo_type: dataset
+    raw_dir: raw/corpora/dci-agent-corpus
+
+resources:
+  benchmark.browsecomp_plus:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns:
+      - data/browsecomp-plus/**
+      - "*.md"
+      - "*.json"
+    source: data/browsecomp-plus
+    output: processed/benchmarks/browsecomp_plus/bcplus_qa.jsonl
+    processor: bcplus_qa
+    description: BrowseComp-Plus encrypted QA parquet shards converted to canonical JSONL.
+    expected_min_records: 1
+    options:
+      decrypt: true
+
+  corpus.browsecomp_plus:
+    kind: corpus
+    repository: corpora
+    allow_patterns:
+      - browsecomp_plus/**
+    source: browsecomp_plus
+    output: processed/corpora/browsecomp_plus
+    processor: browsecomp_docs
+    description: BrowseComp-Plus parquet corpus exported to domain-first UTF-8 text files.
+    expected_min_files: 100000
+
+  benchmark.bright_biology:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/bright_biology/**]
+    source: data/bright_biology/bright_biology.jsonl
+    output: processed/benchmarks/bright/biology.jsonl
+    processor: publish_file
+    description: BRIGHT Biology benchmark JSONL.
+    expected_min_records: 1
+
+  corpus.bright_biology:
+    kind: corpus
+    repository: corpora
+    allow_patterns: [bright_biology/**]
+    source: bright_biology
+    output: processed/corpora/bright/biology
+    processor: bright_docs
+    description: BRIGHT Biology parquet corpus exported while preserving document IDs as paths.
+    expected_min_files: 57000
+
+  benchmark.bright_earth_science:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/bright_earth_science/**]
+    source: data/bright_earth_science/bright_earth_science.jsonl
+    output: processed/benchmarks/bright/earth_science.jsonl
+    processor: publish_file
+    description: BRIGHT Earth Science benchmark JSONL.
+    expected_min_records: 1
+
+  corpus.bright_earth_science:
+    kind: corpus
+    repository: corpora
+    allow_patterns: [bright_earth_science/**]
+    source: bright_earth_science
+    output: processed/corpora/bright/earth_science
+    processor: bright_docs
+    description: BRIGHT Earth Science corpus exported to searchable document files.
+    expected_min_files: 121000
+
+  benchmark.bright_economics:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/bright_economics/**]
+    source: data/bright_economics/economics_full.jsonl
+    output: processed/benchmarks/bright/economics.jsonl
+    processor: publish_file
+    description: BRIGHT Economics benchmark JSONL.
+    expected_min_records: 1
+
+  corpus.bright_economics:
+    kind: corpus
+    repository: corpora
+    allow_patterns: [bright_economics/**]
+    source: bright_economics
+    output: processed/corpora/bright/economics
+    processor: bright_docs
+    description: BRIGHT Economics corpus exported to searchable document files.
+    expected_min_files: 50000
+
+  benchmark.bright_robotics:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/bright_robotics/**]
+    source: data/bright_robotics/bright_robotics.jsonl
+    output: processed/benchmarks/bright/robotics.jsonl
+    processor: publish_file
+    description: BRIGHT Robotics benchmark JSONL.
+    expected_min_records: 1
+
+  corpus.bright_robotics:
+    kind: corpus
+    repository: corpora
+    allow_patterns: [bright_robotics/**]
+    source: bright_robotics
+    output: processed/corpora/bright/robotics
+    processor: bright_docs
+    description: BRIGHT Robotics corpus exported to searchable document files.
+    expected_min_files: 61000
+
+  benchmark.nq:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/nq/**]
+    source: data/nq/test.jsonl
+    output: processed/benchmarks/wiki_qa/nq.jsonl
+    processor: publish_file
+    description: Natural Questions evaluation file.
+    expected_min_records: 1
+
+  benchmark.triviaqa:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/triviaqa/**]
+    source: data/triviaqa/test.jsonl
+    output: processed/benchmarks/wiki_qa/triviaqa.jsonl
+    processor: publish_file
+    description: TriviaQA evaluation file.
+    expected_min_records: 1
+
+  benchmark.bamboogle:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/bamboogle/**]
+    source: data/bamboogle/test.jsonl
+    output: processed/benchmarks/wiki_qa/bamboogle.jsonl
+    processor: publish_file
+    description: Bamboogle evaluation file.
+    expected_min_records: 1
+
+  benchmark.hotpotqa:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/hotpotqa/**]
+    source: data/hotpotqa/test.jsonl
+    output: processed/benchmarks/wiki_qa/hotpotqa.jsonl
+    processor: publish_file
+    description: HotpotQA evaluation file.
+    expected_min_records: 1
+
+  benchmark.2wikimultihopqa:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/2wikimultihopqa/**]
+    source: data/2wikimultihopqa/test.jsonl
+    output: processed/benchmarks/wiki_qa/2wikimultihopqa.jsonl
+    processor: publish_file
+    description: 2WikiMultiHopQA evaluation file.
+    expected_min_records: 1
+
+  benchmark.musique:
+    kind: benchmark
+    repository: benchmarks
+    allow_patterns: [data/musique/**]
+    source: data/musique/test.jsonl
+    output: processed/benchmarks/wiki_qa/musique.jsonl
+    processor: publish_file
+    description: MuSiQue evaluation file.
+    expected_min_records: 1
+
+  corpus.wikipedia_18:
+    kind: corpus
+    repository: corpora
+    allow_patterns: [wiki/**]
+    source: wiki
+    output: processed/corpora/wiki
+    processor: publish_tree
+    description: Wikipedia-18 corpus exposed by a zero-copy symlink to the immutable raw download.
+    large: true
+    expected_min_files: 1
+
+
+datasets:
+  browsecomp_plus:
+    description: BrowseComp-Plus QA benchmark with its local web-document corpus.
+    benchmark: benchmark.browsecomp_plus
+    corpus: corpus.browsecomp_plus
+    aliases: [browsecomp-plus, bcplus, browsecomp]
+
+  bright_biology:
+    description: BRIGHT Biology retrieval benchmark and corpus.
+    benchmark: benchmark.bright_biology
+    corpus: corpus.bright_biology
+    aliases: [bright-biology, biology]
+
+  bright_earth_science:
+    description: BRIGHT Earth Science retrieval benchmark and corpus.
+    benchmark: benchmark.bright_earth_science
+    corpus: corpus.bright_earth_science
+    aliases: [bright-earth-science, earth-science]
+
+  bright_economics:
+    description: BRIGHT Economics retrieval benchmark and corpus.
+    benchmark: benchmark.bright_economics
+    corpus: corpus.bright_economics
+    aliases: [bright-economics, economics]
+
+  bright_robotics:
+    description: BRIGHT Robotics retrieval benchmark and corpus.
+    benchmark: benchmark.bright_robotics
+    corpus: corpus.bright_robotics
+    aliases: [bright-robotics, robotics]
+
+  nq:
+    description: Natural Questions evaluated against Wikipedia-18.
+    benchmark: benchmark.nq
+    corpus: corpus.wikipedia_18
+    aliases: [natural-questions]
+
+  triviaqa:
+    description: TriviaQA evaluated against Wikipedia-18.
+    benchmark: benchmark.triviaqa
+    corpus: corpus.wikipedia_18
+    aliases: [trivia-qa]
+
+  bamboogle:
+    description: Bamboogle evaluated against Wikipedia-18.
+    benchmark: benchmark.bamboogle
+    corpus: corpus.wikipedia_18
+    aliases: []
+
+  hotpotqa:
+    description: HotpotQA evaluated against Wikipedia-18.
+    benchmark: benchmark.hotpotqa
+    corpus: corpus.wikipedia_18
+    aliases: [hotpot-qa]
+
+  2wikimultihopqa:
+    description: 2WikiMultiHopQA evaluated against Wikipedia-18.
+    benchmark: benchmark.2wikimultihopqa
+    corpus: corpus.wikipedia_18
+    aliases: [2wiki, 2wiki-multihop-qa]
+
+  musique:
+    description: MuSiQue evaluated against Wikipedia-18.
+    benchmark: benchmark.musique
+    corpus: corpus.wikipedia_18
+    aliases: []
+
+
+groups:
+  all_small:
+    - browsecomp_plus
+    - bright_biology
+    - bright_earth_science
+    - bright_economics
+    - bright_robotics
+  bright:
+    - bright_biology
+    - bright_earth_science
+    - bright_economics
+    - bright_robotics
+  wikipedia_qa:
+    - nq
+    - triviaqa
+    - bamboogle
+    - hotpotqa
+    - 2wikimultihopqa
+    - musique

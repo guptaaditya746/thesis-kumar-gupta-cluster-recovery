@@ -1,0 +1,97 @@
+# Text-only configuration for the processed benchmark/corpus layout.
+# Benchmarks (questions and golden answers): ../../../../data/processed/benchmarks/
+# Corpora (searchable text bulk): ../../../../data/processed/corpora/
+# For open-corpus runs, documents are discovered by the Pi retrieval agent.
+# Embeddings remain enabled only for local graph-node selection after retrieval.
+[runtime]
+operation = "pipeline"
+output_root = "../../../../outputs/query_driven/bright_biology"
+cache_root = "../../cache/bright_biology"
+resume = true
+overwrite = false
+concurrency = 8
+# max_questions = 20
+max_refinement_iterations = 5
+initial_entity_count = 2
+table_entity_count = 1
+
+[logging]
+level = "INFO"
+json = false
+colors = true
+# file = "../../outputs/mmqa/service.log.jsonl"
+
+[dataset]
+# Benchmark questions and golden answers are loaded from dataset.questions.
+# The processed corpus is a directory of .txt files; it needs a corpus-index loader.
+corpus_root = "../../../../data/processed/corpora/bright/biology"
+format = "bright"
+name = "bright_biology"
+questions = "../../../../data/processed/benchmarks/bright/biology.jsonl"
+qid_field = "id"
+question_field = "query"
+text_id_field = "id"
+text_content_field = "text"
+document_id_field = "id"
+document_content_field = "text"
+
+[text_model]
+kind = "openai_compatible"
+endpoint = "http://127.0.0.1:4000/v1/chat/completions"
+model = "qwen-chat"
+api_key_env = ""
+temperature = 0.0
+top_p = 1.0
+max_tokens = 
+
+[embedding]
+enabled = true
+endpoint = "http://127.0.0.1:4000/v1/embeddings"
+model = "qwen-embed"
+cache_dir = "../../cache/bright_biology/embeddings"
+
+[agent]
+package_dir = "../../../pi_runtime/pi-mono/packages/coding-agent"
+agent_dir = "../../../pi_runtime/pi-mono/.pi/agent"
+provider = "vllm"
+model = "qwen-chat"
+tools = ["read", "bash"]
+max_turns = 100
+thinking = "high"
+context_management_level = "level3"
+node_max_old_space_size_mb = 8192
+
+[retrieval]
+enabled = true
+source = "corpus_root"
+kind = "agent"
+use_query_pattern = true
+top_k = 20
+evaluation_k = 10
+max_search_turns = 50
+show_tools = false
+keep_session = false
+forbid_gold_fields = ["gold_ids", "gold_docs", "positive_ctxs", "supporting_facts"]
+
+[vision]
+# Vision models are intentionally not used.
+enabled = false
+
+[image_selector]
+# Retained for schema compatibility; no images are configured.
+# 'first' avoids an external Gemini dependency. Set to 'gemini' for the original proxy-selection idea.
+kind = "first"
+
+[clip]
+# Image preselection is disabled.
+# Enable together with `uv sync --extra multimodal` to reproduce CLIP image preselection.
+enabled = false
+
+[evaluation]
+enabled = true
+kind = "retrieval"
+gold_field = "gold_ids"
+prediction_field = "retrieved_ids"
+metrics = ["ndcg@10", "recall@10", "recall@20", "mrr"]
+
+# prediction_file and gold_file default to this run's predictions.json and dataset.questions.

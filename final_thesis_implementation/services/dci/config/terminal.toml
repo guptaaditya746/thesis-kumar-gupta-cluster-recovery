@@ -1,0 +1,20 @@
+version = 1
+operation = "terminal"
+
+[logging]
+level = "INFO"
+json = false
+
+[pi]
+package_dir = "../pi_runtime/pi-mono/packages/coding-agent"
+agent_dir = "../pi_runtime/pi-mono/.pi/agent"
+provider = "vllm"
+model = "qwen-chat"
+tools = ["read", "bash", "grep", "find", "ls"]
+thinking = "high"
+context_management_level = "level3"
+
+[run]
+cwd = "../../data/processed/corpora/wiki"
+# Optional initial question:
+# question = "Inspect the corpus and answer ..."

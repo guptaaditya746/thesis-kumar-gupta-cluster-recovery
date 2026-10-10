@@ -1,0 +1,69 @@
+# Generated/runtime state
+.git/
+.run/
+logs/
+test_results/
+codex-resume.txt
+digest.txt
+.digest_prompt.md
+*.orig
+
+# Python environments, caches, and compiled artifacts
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# CUDA, compiler, and local tool caches
+.cuda-link/
+.cache/
+.nv/
+.triton/
+torch_compile_cache/
+*.so
+*.a
+*.o
+*.obj
+build/
+dist/
+*.egg-info/
+
+# Downloaded model/tokenizer data and large artifacts
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.onnx
+*.npz
+*.npy
+*.tar
+*.tar.gz
+*.zip
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*secret*
+*token*
+*credential*
+
+# Editor and operating-system files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+

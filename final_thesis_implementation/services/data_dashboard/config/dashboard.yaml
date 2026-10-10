@@ -1,0 +1,44 @@
+# Paths are resolved relative to this service directory unless absolute.
+processed_root: ../../data/processed
+manifest_root: ../../data/manifests
+output_root: ../../outputs/data_dashboard
+experiment_root: ../../outputs/pi_bench/runs
+
+server:
+  host: 0.0.0.0
+  port: 8501
+
+preview:
+  default_rows: 100
+  maximum_rows: 5000
+  maximum_text_characters: 20000
+  quality_sample_rows: 50000
+
+catalog:
+  database: ../../outputs/data_dashboard/catalog.duckdb
+  recursive: true
+  exact_count_max_bytes: 134217728   # 128 MiB
+  max_files_per_dataset: 250000
+  follow_symlinks: false
+
+search:
+  timeout_seconds: 20
+  maximum_matches: 200
+  maximum_matches_per_file: 5
+
+safety:
+  read_only: true
+  allow_sample_download: true
+  allow_full_dataset_download: false
+
+# Optional explicit entries. When empty, immediate directories under
+# data/processed/benchmarks and data/processed/corpora are auto-discovered.
+datasets: []
+
+# Example explicit entry:
+# datasets:
+#   - id: browsecomp_plus
+#     name: BrowseComp-Plus
+#     benchmark_path: ../../data/processed/benchmarks/browsecomp_plus
+#     corpus_path: ../../data/processed/corpora/browsecomp_plus
+#     description: BrowseComp-Plus benchmark and local document corpus.

@@ -1,0 +1,9 @@
+version = 1
+operation = "download_dataset"
+
+[logging]
+level = "INFO"
+json = false
+
+[data]
+local_dir = "../../data/raw/benchmarks/dci-bench"

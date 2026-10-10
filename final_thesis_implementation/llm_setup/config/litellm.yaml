@@ -1,0 +1,64 @@
+model_list:
+  # Stable aliases: clients do not change when the backend profile changes.
+  - model_name: heavy-model
+    litellm_params:
+      model: openai/heavy-model
+      api_base: os.environ/VLLM_HEAVY_API_BASE
+      api_key: ""
+      input_cost_per_token: ""
+      output_cost_per_token: ""
+      cache_creation_input_token_cost: ""
+      cache_read_input_token_cost: ""
+    model_info:
+      input_cost_per_token: ""
+      output_cost_per_token: ""
+      cache_creation_input_token_cost: ""
+      cache_read_input_token_cost: ""
+
+  - model_name: lite-model
+    litellm_params:
+      model: openai/lite-model
+      api_base: os.environ/VLLM_LITE_API_BASE
+      api_key: ""
+      input_cost_per_token: ""
+      output_cost_per_token: ""
+      cache_creation_input_token_cost: ""
+      cache_read_input_token_cost: ""
+    model_info:
+      input_cost_per_token: ""
+      output_cost_per_token: ""
+      cache_creation_input_token_cost: ""
+      cache_read_input_token_cost: ""
+
+  - model_name: qwen-chat
+    litellm_params:
+      model: openai/heavy-model
+      api_base: os.environ/VLLM_API_BASE
+      api_key: ""
+      input_cost_per_token: ""
+      output_cost_per_token: ""
+      cache_creation_input_token_cost: ""
+      cache_read_input_token_cost: ""
+    model_info:
+      input_cost_per_token: ""
+      output_cost_per_token: ""
+      cache_creation_input_token_cost: ""
+      cache_read_input_token_cost: ""
+
+  - model_name: qwen-embed
+    litellm_params:
+      model: openai/qwen-embed
+      api_base: os.environ/VLLM_EMBED_API_BASE
+      api_key: ""
+      input_cost_per_token: ""
+      output_cost_per_token: ""
+      cache_creation_input_token_cost: ""
+      cache_read_input_token_cost: ""
+    model_info:
+      input_cost_per_token: ""
+      output_cost_per_token: ""
+      cache_creation_input_token_cost: ""
+      cache_read_input_token_cost: ""
+
+general_settings:
+  master_key: ""

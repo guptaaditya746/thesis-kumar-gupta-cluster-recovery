@@ -1,0 +1,11 @@
+version = 1
+operation = "export_bright"
+
+[logging]
+level = "INFO"
+json = false
+
+[data]
+source_root = "../../data/raw/corpora/dci-agent-corpus/bright_corpus_raw"
+output_root = "../../data/processed/corpora/bright"
+subsets = ["biology", "earth_science", "economics", "robotics"]

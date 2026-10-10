@@ -1,0 +1,50 @@
+# Ingest only the runnable service, its tests, and configuration needed to
+# understand the execution path.  GitIngest uses gitignore-style rules.
+
+# Ignore everything by default.
+*
+
+# Keep this policy file and the service's essential project metadata.
+!.gitingestignore
+!.gitignore
+!pyproject.toml
+!README.md
+!SERVICE.md
+!setup.sh
+
+# Keep the runnable implementation and its regression tests.
+!src/
+!src/**
+!tests/
+!tests/**
+
+# Keep experiment configuration and the launch helper.
+!config/
+!config/**
+!scripts/
+!scripts/**
+
+# Explicitly omit the unmodified upstream snapshot: it is retained only for
+# provenance and is not imported by the runnable service.
+upstream/
+
+# Omit generated runtime material and local development state.
+outputs/
+cache/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+htmlcov/
+
+# Omit editor, agent, and operating-system metadata.
+.agents/
+.codex/
+.idea/
+.vscode/
+.DS_Store

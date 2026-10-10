@@ -1,0 +1,45 @@
+version = 1
+operation = "single"
+
+[logging]
+level = "INFO"
+json = false
+
+[pi]
+# Paths are resolved relative to services/dci, even for configs in subdirectories.
+package_dir = "../pi_runtime/pi-mono/packages/coding-agent"
+agent_dir = "../pi_runtime/pi-mono/.pi/agent"
+
+# Your working Pi -> LiteLLM/vLLM setup.
+provider = "vllm"
+model = "qwen-chat"
+tools = ["read", "bash"]
+max_turns = 100
+thinking = "high"
+context_management_level = "level3"
+node_max_old_space_size_mb = 8192
+extra_args = []
+
+[run]
+cwd = "../../data/processed/corpora/wiki"
+output_dir = "../../outputs/dci/single/example4"
+question = "In which street did the Great Fire of London originate?"
+resume = false
+keep_session = false
+show_tools = true
+# system_prompt_file = "prompts/system_prompt.txt"
+# append_system_prompt_file = "prompts/extra.txt"
+
+[conversation]
+clear_tool_results = false
+keep_last = 3
+externalize_tool_results = false
+strip_thinking = false
+strip_usage = false
+
+[evaluation]
+# Leave answer/answer_file unset to disable judging for a single run.
+# answer = "Pudding Lane"
+judge_model = "gpt-5.4-nano"
+judge_api_key_env = ""
+judge_timeout_seconds = 120

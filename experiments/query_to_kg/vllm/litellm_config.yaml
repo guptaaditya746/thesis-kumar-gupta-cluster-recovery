@@ -1,0 +1,23 @@
+# LiteLLM config for the two local vLLM OpenAI-compatible endpoints.
+# Keep routing here. Keep vLLM process settings in serve_qwen35_litellm.conf.
+
+model_list:
+  - model_name: qwen-chat
+    litellm_params:
+      model: openai/qwen-chat
+      api_base: http://127.0.0.1:8000/v1
+      api_key: ""
+    model_info:
+      mode: chat
+
+  - model_name: qwen-embed
+    litellm_params:
+      model: openai/qwen-embed
+      api_base: http://127.0.0.1:8001/v1
+      api_key: ""
+    model_info:
+      mode: embedding
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false

@@ -1,0 +1,3 @@
+Assembled from attached Repomix file: Pasted markdown.md
+Supplied repository files reconstructed: 38
+Added: config-driven facade, structlog logging, examples, tests, SERVICE.md.

@@ -1,0 +1,15 @@
+version = 1
+operation = "print_system_prompt"
+
+[logging]
+level = "INFO"
+json = false
+
+[pi]
+package_dir = "../pi_runtime/pi-mono/packages/coding-agent"
+agent_dir = "../pi_runtime/pi-mono/.pi/agent"
+tools = ["read", "bash"]
+
+[run]
+cwd = "../../data/processed/corpora/wiki"
+# append_system_prompt_file = "prompts/system_prompt.txt"

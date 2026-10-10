@@ -1,0 +1,98 @@
+# Query-Driven GraphRAG adaptation — BRIGHT Biology
+#
+# FAIR-RETRIEVAL REQUIREMENT:
+#   gold_ids are evaluation targets only.
+#   They MUST NOT be used to choose documents for extraction/graph construction.
+#
+# Pipeline:
+#   question -> query pattern -> full-corpus retrieval -> extraction -> graph
+#   -> inference/answer
+#
+# Primary BRIGHT score:
+#   retrieved_ids vs gold_ids -> NDCG@10
+#
+# The generated answer is retained as a secondary artifact, but the old MMQA
+# list-EM/list-F1 evaluator must not be used for BRIGHT.
+
+[runtime]
+operation = "pipeline"
+output_root = "../../../../outputs/query_driven/bright/biology"
+cache_root = "../../cache/bright/biology"
+resume = true
+overwrite = false
+concurrency = 8
+max_refinement_iterations = 5
+initial_entity_count = 2
+table_entity_count = 1
+
+[logging]
+level = "INFO"
+json = false
+colors = true
+# file = "../../cache/query_driven/service.log.jsonl"
+
+[dataset]
+# Do not label BRIGHT as WebQA just to bypass MMQA validation.
+format = "bright"
+questions = "../../../../data/processed/benchmarks/bright/biology.jsonl"
+corpus_root = "../../../../data/processed/corpora/bright/biology"
+
+qid_field = "id"
+question_field = "query"
+document_id_field = "id"
+document_content_field = "text"
+
+[text_model]
+kind = "openai_compatible"
+endpoint = "http://127.0.0.1:4000/v1/chat/completions"
+model = "qwen-chat"
+api_key_env = ""
+temperature = 0.0
+top_p = 1.0
+max_tokens = 
+timeout_seconds = 120
+
+[embedding]
+enabled = true
+endpoint = "http://127.0.0.1:4000/v1/embeddings"
+model = "qwen-embed"
+cache_dir = "../../cache/bright/biology/embeddings"
+timeout_seconds = 120
+
+[retrieval]
+# This stage must search the FULL corpus without seeing gold_ids.
+enabled = true
+source = "corpus_root"
+
+# A neutral first implementation for the text-only BRIGHT adaptation.
+# The query pattern may be used to expand/guide retrieval, but gold IDs may not.
+kind = "agent"
+
+use_query_pattern = true
+
+# Retrieve enough evidence for graph construction; evaluate the first 10.
+top_k = 20
+evaluation_k = 10
+max_search_turns = 50
+
+# Important leakage guard.
+forbid_gold_fields = ["gold_ids", "gold_docs", "positive_ctxs", "supporting_facts"]
+
+[vision]
+enabled = false
+
+[image_selector]
+kind = "first"
+
+[clip]
+enabled = false
+
+[evaluation]
+enabled = true
+kind = "retrieval"
+gold_field = "gold_ids"
+prediction_field = "retrieved_ids"
+metrics = ["ndcg@10", "recall@10", "recall@20", "mrr"]
+
+# BRIGHT answers are long/free-form. Do NOT run MMQA list_em/list_f1 here.
+evaluate_answer = false

@@ -1,0 +1,31 @@
+version = 1
+operation = "benchmark"
+
+[logging]
+level = "DEBUG"
+json = false
+
+[pi]
+# Paths are resolved relative to services/dci, even for configs in subdirectories.
+package_dir = "../pi_runtime/pi-mono/packages/coding-agent"
+agent_dir = "../pi_runtime/pi-mono/.pi/agent"
+
+# Your working Pi -> LiteLLM/vLLM setup.
+provider = "vllm"
+model = "qwen-chat"
+tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
+max_turns = 300
+thinking = "high"
+context_management_level = "level3"
+node_max_old_space_size_mb = 8192
+extra_args = []
+
+[benchmark]
+# IR mode: the agent still searches and answers, but DCI scores ranked retrieved documents with NDCG@10.
+mode = "ir"
+dataset = "../../data/processed/benchmarks/bright/biology.jsonl"
+corpus_dir = "../../data/processed/corpora/bright/biology"
+output_root = "../../outputs/dci/retrieval/bright_biology/all_tools/qwen3.8b/langtrace2"
+max_concurrency = 1
+# limit = 10
+corpus_hint = """Biology documents are local text files. Search scientific names, biological processes, aliases, abbreviations, and related terminology; rank only directly relevant documents."""

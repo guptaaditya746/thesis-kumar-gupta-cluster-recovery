@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dci"
+version = "0.1.0"
+description = "High Resolution Corpus Interaction"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.91.0",
+    "datasets",
+    "httpx>=0.28.1",
+    "huggingface-hub",
+    "importlib-metadata>=9.0.0",
+    "jinja2>=3.1",
+    "langtrace-python-sdk>=3.8.21",
+    "matplotlib",
+    "numpy",
+    "openai>=1,<2",
+    "pyarrow",
+    "scipy",
+    "setuptools<81",
+    "structlog>=24.4,<26",
+    "tomli>=2.0; python_version < '3.11'",
+    "tqdm",
+]
+
+[project.scripts]
+dci-service = "dci.service.cli:main"
+dci-export-bc-plus-docs = "dci.benchmark.export_bc_plus_docs:main"
+dci-export-bright-docs = "dci.benchmark.export_bright_docs:main"
+dci-agent-lite = "dci.benchmark.pi_rpc_runner:main"
+dci-run-pi-rpc = "dci.benchmark.pi_rpc_runner:main"
+dci-print-pi-system-prompt = "dci.benchmark.pi_system_prompt:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dci"]

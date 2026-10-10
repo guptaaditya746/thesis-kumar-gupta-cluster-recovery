@@ -1,0 +1,12 @@
+# Keep the directory structure and metadata, but never commit downloaded corpora.
+raw/
+interim/
+processed/
+logs/
+checksums/*.sha256
+
+# Manifests are small and useful for reproducibility. Keep them tracked unless
+# they contain paths you prefer not to publish.
+!manifests/
+!manifests/**/*.json
+!README.data-layout.md

@@ -1,0 +1,1130 @@
+#!/usr/bin/env python3
+"""Small, profile-driven manager for one vLLM backend and LiteLLM gateway."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import time
+import tomllib
+import urllib.error
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent.parent
+REGISTRY_PATH = ROOT / "config" / "vllm_models.toml"
+LITELLM_CONFIG_PATH = ROOT / "config" / "litellm.yaml"
+RUN_DIR = ROOT / ".run"
+LOG_DIR = ROOT / "logs" / "models"
+MODEL_STATE_PATH = RUN_DIR / "vllm-model.json"
+HEAVY_STATE_PATH = RUN_DIR / "vllm-heavy.json"
+HEAVY_LAST_STATE_PATH = RUN_DIR / "vllm-heavy-last.json"
+LITE_STATE_PATH = RUN_DIR / "vllm-lite.json"
+LITE_LAST_STATE_PATH = RUN_DIR / "vllm-lite-last.json"
+MODEL_LAST_STATE_PATH = RUN_DIR / "vllm-model-last.json"
+EMBED_STATE_PATH = RUN_DIR / "vllm-embedding.json"
+EMBED_LAST_STATE_PATH = RUN_DIR / "vllm-embedding-last.json"
+GATEWAY_STATE_PATH = RUN_DIR / "litellm.json"
+GATEWAY_LAST_STATE_PATH = RUN_DIR / "litellm-last.json"
+
+
+class ManagerError(RuntimeError):
+    pass
+
+
+def load_registry() -> tuple[
+    dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]]
+]:
+    try:
+        with REGISTRY_PATH.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ManagerError(f"cannot read {REGISTRY_PATH}: {exc}") from exc
+
+    if data.get("schema_version") != 1:
+        raise ManagerError("unsupported registry schema_version")
+    settings = data.get("settings")
+    models = data.get("models")
+    embeddings = data.get("embeddings")
+    if not isinstance(settings, dict) or not isinstance(models, dict) or not models:
+        raise ManagerError("registry must contain [settings] and at least one model")
+    if not isinstance(embeddings, dict) or not embeddings:
+        raise ManagerError("registry must contain at least one embedding profile")
+    return settings, models, embeddings
+
+
+SETTINGS, MODELS, EMBEDDINGS = load_registry()
+
+
+def ordered_profiles(
+    profiles: dict[str, dict[str, Any]],
+) -> list[tuple[str, dict[str, Any]]]:
+    return sorted(profiles.items(), key=lambda item: (item[1].get("order", 999), item[0]))
+
+
+def profile(name: str) -> dict[str, Any]:
+    if name in MODELS:
+        return MODELS[name]
+    matches = [
+        key
+        for key, value in MODELS.items()
+        if name in {value.get("model_id"), value.get("display_name")}
+    ]
+    if len(matches) == 1:
+        return MODELS[matches[0]]
+    raise ManagerError(f"unknown model profile {name!r}; run: ./scripts/vllm-model list")
+
+
+def embedding_profile(name: str) -> dict[str, Any]:
+    if name in EMBEDDINGS:
+        return EMBEDDINGS[name]
+    matches = [
+        key
+        for key, value in EMBEDDINGS.items()
+        if name in {value.get("model_id"), value.get("display_name")}
+    ]
+    if len(matches) == 1:
+        return EMBEDDINGS[matches[0]]
+    raise ManagerError(
+        f"unknown embedding profile {name!r}; run: ./scripts/vllm-model embed list"
+    )
+
+
+def profile_key(selected: dict[str, Any]) -> str:
+    for key, value in MODELS.items():
+        if value is selected:
+            return key
+    raise ManagerError("internal profile lookup failure")
+
+
+def embedding_profile_key(selected: dict[str, Any]) -> str:
+    for key, value in EMBEDDINGS.items():
+        if value is selected:
+            return key
+    raise ManagerError("internal embedding-profile lookup failure")
+
+
+def argument_value(command: list[str], flag: str, default: str = "—") -> str:
+    try:
+        return command[command.index(flag) + 1]
+    except (ValueError, IndexError):
+        return default
+
+
+def resolve_local_snapshot(model_id: str) -> Path:
+    hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    cache_dir = hf_home / "hub" / f"models--{model_id.replace('/', '--')}"
+    snapshots_dir = cache_dir / "snapshots"
+    candidates: list[Path] = []
+
+    main_ref = cache_dir / "refs" / "main"
+    if main_ref.is_file():
+        revision = main_ref.read_text(encoding="utf-8").strip()
+        if revision:
+            candidates.append(snapshots_dir / revision)
+    if snapshots_dir.is_dir():
+        candidates.extend(
+            sorted(
+                (item for item in snapshots_dir.iterdir() if item.is_dir()),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+        )
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if (candidate / "config.json").is_file() and (
+            (candidate / "model.safetensors.index.json").is_file()
+            or any(candidate.glob("*.safetensors"))
+        ):
+            return candidate.resolve()
+
+    raise ManagerError(
+        f"complete local snapshot not found for {model_id}; expected it below {snapshots_dir}"
+    )
+
+
+def resolved_model(profile_data: dict[str, Any]) -> str:
+    model_id = str(profile_data["model_id"])
+    source = profile_data.get("source", "model_id")
+    if source == "model_id":
+        return model_id
+    if source == "local_snapshot":
+        return str(resolve_local_snapshot(model_id))
+    raise ManagerError(f"unsupported model source {source!r} for {model_id}")
+
+
+def api_key() -> str:
+    return os.environ.get("VLLM_API_KEY", str(SETTINGS["default_api_key"]))
+
+
+def render_command(profile_data: dict[str, Any], *, redact_key: bool = False, port: int | None = None, served_model_name: str | None = None) -> list[str]:
+    model = resolved_model(profile_data)
+    key = "<from VLLM_API_KEY>" if redact_key else api_key()
+    rendered = []
+    for item in profile_data["command"]:
+        rendered.append(str(item).replace("{model}", model).replace("{api_key}", key).replace("{port}", str(port) if port is not None else str(SETTINGS["vllm_port"])).replace("{served_model_name}", served_model_name or str(SETTINGS["served_model_name"])))
+    return rendered
+
+
+def printable_command(profile_data: dict[str, Any]) -> str:
+    model = resolved_model(profile_data)
+    rendered: list[str] = []
+    for item in profile_data["command"]:
+        value = str(item).replace("{model}", model)
+        if value == "{api_key}":
+            rendered.append('"${VLLM_API_KEY}"')
+        else:
+            rendered.append(shlex.quote(value))
+    env = profile_data.get("environment", {})
+    prefixes = [f"{key}={shlex.quote(str(value))}" for key, value in sorted(env.items())]
+    command = " \\\n  ".join(prefixes + rendered)
+    return f'export VLLM_API_KEY="${{VLLM_API_KEY:-{SETTINGS["default_api_key"]}}}"\n{command}'
+
+
+def command_environment(profile_data: dict[str, Any]) -> dict[str, str]:
+    result = os.environ.copy()
+    result.update({str(key): str(value) for key, value in profile_data.get("environment", {}).items()})
+    return result
+
+
+def read_state(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManagerError(f"cannot read state file {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ManagerError(f"invalid state file {path}")
+    return value
+
+
+def write_state(path: Path, value: dict[str, Any]) -> None:
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
+def archive_and_clear_state(path: Path, last_path: Path, state: dict[str, Any]) -> None:
+    state["stopped_at"] = datetime.now().astimezone().isoformat()
+    write_state(last_path, state)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def process_start_ticks(pid: int) -> str | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    end = stat.rfind(")")
+    fields = stat[end + 2 :].split()
+    return fields[19] if len(fields) > 19 else None
+
+
+def process_cmdline(pid: int) -> str:
+    try:
+        data = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return ""
+    return data.replace(b"\0", b" ").decode(errors="replace").strip()
+
+
+def process_pids() -> list[int]:
+    return [int(item.name) for item in Path("/proc").iterdir() if item.name.isdigit()]
+
+
+def state_command_matches(pid: int, state: dict[str, Any], expected: tuple[str, ...]) -> bool:
+    command = process_cmdline(pid)
+    if not command or not all(token in command for token in expected):
+        return False
+    port = str(state.get("port", ""))
+    if port and f"--port {port}" not in command:
+        return False
+    model_id = str(state.get("model_id", ""))
+    if model_id and model_id.split("/")[-1] not in command:
+        return False
+    return True
+
+
+def matching_state_processes(state: dict[str, Any], expected: tuple[str, ...]) -> list[int]:
+    return [pid for pid in process_pids() if state_command_matches(pid, state, expected)]
+
+
+def state_process_is_live(state: dict[str, Any], expected: tuple[str, ...]) -> bool:
+    pid = int(state.get("pid", 0))
+    if pid > 0 and process_start_ticks(pid) == str(state.get("process_start_ticks", "")):
+        return state_command_matches(pid, state, expected)
+    return bool(matching_state_processes(state, expected))
+
+
+def port_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.3)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def require_port_free(port: int, service: str) -> None:
+    if port_open(port):
+        raise ManagerError(
+            f"port {port} is already occupied; refusing to interfere with the existing {service} process"
+        )
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError as exc:
+            raise ManagerError(f"port {port} is not available for {service}: {exc}") from exc
+
+
+def http_json(
+    url: str,
+    *,
+    key: str | None = None,
+    payload: dict[str, Any] | None = None,
+    timeout: float = 10.0,
+) -> tuple[int, Any]:
+    headers: dict[str, str] = {}
+    data = None
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read()
+            if not body:
+                return response.status, None
+            try:
+                return response.status, json.loads(body)
+            except json.JSONDecodeError:
+                return response.status, body.decode(errors="replace")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        raise ManagerError(f"HTTP {exc.code} from {url}: {body[:500]}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise ManagerError(f"request failed for {url}: {exc}") from exc
+
+
+def tail(path: Path, lines: int = 80) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            content = handle.readlines()
+    except OSError as exc:
+        return f"cannot read log {path}: {exc}"
+    return "".join(content[-lines:])
+
+
+def start_process(
+    *,
+    name: str,
+    command: list[str],
+    environment: dict[str, str],
+    state_path: Path,
+    log_path: Path,
+    extra_state: dict[str, Any],
+) -> dict[str, Any]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab", buffering=0) as log_handle:
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    ticks = process_start_ticks(process.pid)
+    if ticks is None:
+        raise ManagerError(f"{name} exited before process state could be recorded")
+    state = {
+        "service": name,
+        "pid": process.pid,
+        "process_group": process.pid,
+        "process_start_ticks": ticks,
+        "started_at": datetime.now().astimezone().isoformat(),
+        "log": str(log_path),
+        "command": command,
+        **extra_state,
+    }
+    write_state(state_path, state)
+    return state
+
+
+def wait_until_ready(
+    state: dict[str, Any],
+    *,
+    expected: tuple[str, ...],
+    ready,
+    timeout_seconds: int,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    next_update = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if not state_process_is_live(state, expected):
+            raise ManagerError(
+                f"{state['service']} exited before becoming ready\n\n{tail(Path(state['log']), 120)}"
+            )
+        try:
+            if ready():
+                return
+        except ManagerError:
+            pass
+        if time.monotonic() >= next_update:
+            remaining = max(0, int(deadline - time.monotonic()))
+            print(f"Still waiting for {state['service']} ({remaining}s remaining); log: {state['log']}")
+            next_update = time.monotonic() + 30
+        time.sleep(2)
+    raise ManagerError(
+        f"startup timeout for {state['service']}; it is still running. Inspect {state['log']} or stop it explicitly"
+    )
+
+
+def vllm_ready() -> bool:
+    port = int(SETTINGS["vllm_port"])
+    status, _ = http_json(f"http://127.0.0.1:{port}/health", timeout=2)
+    if status != 200:
+        return False
+    status, models = http_json(
+        f"http://127.0.0.1:{port}/v1/models", key=api_key(), timeout=3
+    )
+    expected = SETTINGS["served_model_name"]
+    return status == 200 and any(item.get("id") == expected for item in (models or {}).get("data", []))
+
+
+def embedding_ready() -> bool:
+    port = int(SETTINGS["embedding_port"])
+    status, _ = http_json(f"http://127.0.0.1:{port}/health", timeout=2)
+    if status != 200:
+        return False
+    status, models = http_json(
+        f"http://127.0.0.1:{port}/v1/models", key=api_key(), timeout=3
+    )
+    expected = SETTINGS["served_embedding_name"]
+    return status == 200 and any(
+        item.get("id") == expected for item in (models or {}).get("data", [])
+    )
+
+
+def gateway_ready() -> bool:
+    port = int(SETTINGS["litellm_port"])
+    for endpoint in ("/health/liveliness", "/health", "/v1/models"):
+        try:
+            status, _ = http_json(f"http://127.0.0.1:{port}{endpoint}", timeout=3)
+            if status == 200:
+                return True
+        except ManagerError:
+            continue
+    return False
+
+
+def clean_stale_state(path: Path, last_path: Path, expected: tuple[str, ...], port: int) -> None:
+    state = read_state(path)
+    if state is None or state_process_is_live(state, expected):
+        return
+    if port_open(port):
+        raise ManagerError(
+            f"state file {path} is stale but port {port} is occupied; inspect the external process manually"
+        )
+    archive_and_clear_state(path, last_path, state)
+
+
+def start_gateway(*, wait: bool = True) -> None:
+    host = str(SETTINGS.get("litellm_host", "127.0.0.1"))
+    port = int(SETTINGS["litellm_port"])
+    clean_stale_state(GATEWAY_STATE_PATH, GATEWAY_LAST_STATE_PATH, ("litellm",), port)
+    existing = read_state(GATEWAY_STATE_PATH)
+    if existing and state_process_is_live(existing, ("litellm",)):
+        print(f"LiteLLM is already running (PID {existing['pid']}) on port {port}.")
+        return
+    require_port_free(port, "LiteLLM")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOG_DIR / "litellm" / f"{timestamp}.log"
+    command = [
+        "uv",
+        "run",
+        "litellm",
+        "--config",
+        str(LITELLM_CONFIG_PATH),
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    environment = os.environ.copy()
+    # A gateway may live on a different node from one or both vLLM backends.
+    # Preserve explicit routes so a local gateway can route stable aliases to
+    # remote services; retain the previous local defaults for single-node use.
+    environment.setdefault(
+        "VLLM_API_BASE", f"http://127.0.0.1:{SETTINGS['heavy_port']}/v1"
+    )
+    environment.setdefault(
+        "VLLM_EMBED_API_BASE", f"http://127.0.0.1:{SETTINGS['embedding_port']}/v1"
+    )
+    environment.setdefault(
+        "VLLM_HEAVY_API_BASE", f"http://127.0.0.1:{SETTINGS['heavy_port']}/v1"
+    )
+    environment.setdefault(
+        "VLLM_LITE_API_BASE", f"http://127.0.0.1:{SETTINGS['lite_port']}/v1"
+    )
+    # The shared cluster environment may expose SQLAlchemy's
+    # ``postgresql+psycopg://`` URL for other services. LiteLLM rejects that
+    # spelling during startup, even though this lightweight gateway does not
+    # use LiteLLM database features.
+    database_url = environment.get("DATABASE_URL", "")
+    if database_url and not database_url.startswith("postgresql://"):
+        environment.pop("DATABASE_URL", None)
+    environment["VLLM_API_KEY"] = api_key()
+    print(f"Starting LiteLLM on http://{host}:{port}/v1")
+    print(f"Log: {log_path}")
+    state = start_process(
+        name="litellm",
+        command=command,
+        environment=environment,
+        state_path=GATEWAY_STATE_PATH,
+        log_path=log_path,
+        extra_state={"port": port},
+    )
+    if wait:
+        wait_until_ready(
+            state,
+            expected=("litellm",),
+            ready=gateway_ready,
+            timeout_seconds=120,
+        )
+        print("LiteLLM: READY")
+
+
+def start_model(name: str, *, wait: bool = True, with_gateway: bool = True) -> None:
+    selected = profile(name)
+    key = profile_key(selected)
+    port = int(SETTINGS["vllm_port"])
+    clean_stale_state(MODEL_STATE_PATH, MODEL_LAST_STATE_PATH, ("vllm", "serve"), port)
+    existing = read_state(MODEL_STATE_PATH)
+    if existing and state_process_is_live(existing, ("vllm", "serve")):
+        raise ManagerError(
+            f"profile {existing.get('profile')} is already running (PID {existing['pid']}); stop or switch it first"
+        )
+    require_port_free(port, "vLLM")
+
+    command = render_command(selected)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOG_DIR / key / f"{timestamp}.log"
+    print(f"Starting {key}: {selected['model_id']}")
+    print(printable_command(selected))
+    print(f"Log: {log_path}")
+    state = start_process(
+        name="vllm",
+        command=command,
+        environment=command_environment(selected),
+        state_path=MODEL_STATE_PATH,
+        log_path=log_path,
+        extra_state={
+            "profile": key,
+            "model_id": selected["model_id"],
+            "served_model_name": SETTINGS["served_model_name"],
+            "port": port,
+        },
+    )
+    # Never persist the API key in process metadata.
+    state["command"] = render_command(selected, redact_key=True)
+    write_state(MODEL_STATE_PATH, state)
+
+    if wait:
+        wait_until_ready(
+            state,
+            expected=("vllm", "serve"),
+            ready=vllm_ready,
+            timeout_seconds=int(
+                os.environ.get(
+                    "VLLM_START_TIMEOUT", SETTINGS.get("startup_timeout_seconds", 1800)
+                )
+            ),
+        )
+        print(f"vLLM {key}: READY")
+    if with_gateway:
+        start_gateway(wait=wait)
+
+
+def start_embedding(name: str, *, wait: bool = True, with_gateway: bool = True) -> None:
+    selected = embedding_profile(name)
+    key = embedding_profile_key(selected)
+    port = int(SETTINGS["embedding_port"])
+    clean_stale_state(EMBED_STATE_PATH, EMBED_LAST_STATE_PATH, ("vllm", "serve"), port)
+    existing = read_state(EMBED_STATE_PATH)
+    if existing and state_process_is_live(existing, ("vllm", "serve")):
+        raise ManagerError(f"embedding profile {existing.get('profile')} is already running")
+    require_port_free(port, "vLLM embedding backend")
+    command = render_command(selected)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOG_DIR / "embeddings" / key / f"{timestamp}.log"
+    print(f"Starting embedding {key}: {selected['model_id']}")
+    print(printable_command(selected))
+    print(f"Log: {log_path}")
+    state = start_process(
+        name="vllm-embedding",
+        command=command,
+        environment=command_environment(selected),
+        state_path=EMBED_STATE_PATH,
+        log_path=log_path,
+        extra_state={
+            "profile": key,
+            "model_id": selected["model_id"],
+            "served_model_name": SETTINGS["served_embedding_name"],
+            "port": port,
+        },
+    )
+    state["command"] = render_command(selected, redact_key=True)
+    write_state(EMBED_STATE_PATH, state)
+    if wait:
+        wait_until_ready(
+            state,
+            expected=("vllm", "serve"),
+            ready=embedding_ready,
+            timeout_seconds=int(os.environ.get(
+                "VLLM_START_TIMEOUT", SETTINGS.get("startup_timeout_seconds", 1800)
+            )),
+        )
+        print(f"vLLM embedding {key}: READY")
+    if with_gateway:
+        start_gateway(wait=wait)
+
+
+
+def pair_command(profile_data: dict[str, Any], *, port: int, served_name: str, utilization: float | None = None, redact_key: bool = False) -> list[str]:
+    command = render_command(profile_data, redact_key=redact_key, port=port, served_model_name=served_name)
+    for index, value in enumerate(command[:-1]):
+        if value == "--port":
+            command[index + 1] = str(port)
+        elif value == "--served-model-name":
+            command[index + 1] = served_name
+        elif value == "--gpu-memory-utilization" and utilization is not None:
+            command[index + 1] = str(utilization)
+    return command
+
+
+def gpu_utilization(profile_data: dict[str, Any]) -> float:
+    command = profile_data["command"]
+    value = argument_value(command, "--gpu-memory-utilization", "0")
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ManagerError(f"invalid --gpu-memory-utilization value {value!r}") from exc
+
+
+def start_pair(heavy_name: str, lite_name: str, *, wait: bool = True) -> None:
+    heavy = profile(heavy_name)
+    lite = profile(lite_name)
+    heavy_port = int(SETTINGS["heavy_port"])
+    lite_port = int(SETTINGS["lite_port"])
+    if heavy_port == lite_port:
+        raise ManagerError("heavy and lite ports must be different")
+    budget = float(SETTINGS.get("gpu_memory_budget", 0.95))
+    utilizations = {
+        "heavy": float(SETTINGS.get("heavy_gpu_memory_utilization", gpu_utilization(heavy))),
+        "lite": float(SETTINGS.get("lite_gpu_memory_utilization", gpu_utilization(lite))),
+    }
+    for role, utilization in utilizations.items():
+        if not 0 < utilization <= budget:
+            raise ManagerError(
+                f"{role} GPU utilization must be greater than 0 and no more than {budget:.2f}; got {utilization:.2f}"
+            )
+    heavy_gpu = str(SETTINGS["heavy_gpu"])
+    lite_gpu = str(SETTINGS["lite_gpu"])
+    if heavy_gpu == lite_gpu:
+        raise ManagerError("heavy and lite must use different CUDA devices")
+    states: list[tuple[Path, Path, dict[str, Any], tuple[str, ...], int, str]] = []
+    try:
+        for selected, key, port, served, utilization, cuda_device, state_path, last_path in (
+            (heavy, profile_key(heavy), heavy_port, str(SETTINGS["heavy_model_name"]), utilizations["heavy"], heavy_gpu, HEAVY_STATE_PATH, HEAVY_LAST_STATE_PATH),
+            (lite, profile_key(lite), lite_port, str(SETTINGS["lite_model_name"]), utilizations["lite"], lite_gpu, LITE_STATE_PATH, LITE_LAST_STATE_PATH),
+        ):
+            clean_stale_state(state_path, last_path, ("vllm", "serve"), port)
+            if read_state(state_path) and state_process_is_live(read_state(state_path) or {}, ("vllm", "serve")):
+                raise ManagerError(f"{key} role is already running")
+            require_port_free(port, f"vLLM {served}")
+            command = pair_command(selected, port=port, served_name=served, utilization=utilization)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_path = LOG_DIR / key / f"{timestamp}-{served}.log"
+            environment = command_environment(selected)
+            environment["CUDA_VISIBLE_DEVICES"] = cuda_device
+            state = start_process(
+                name=f"vllm-{served}", command=command, environment=environment,
+                state_path=state_path, log_path=log_path,
+                extra_state={"profile": key, "model_id": selected["model_id"], "served_model_name": served, "port": port, "cuda_visible_devices": cuda_device, "gpu_memory_utilization": utilization},
+            )
+            state["command"] = pair_command(selected, port=port, served_name=served, utilization=utilization, redact_key=True)
+            write_state(state_path, state)
+            states.append((state_path, last_path, state, ("vllm", "serve"), port, served))
+            if wait:
+                wait_until_ready(state, expected=("vllm", "serve"), ready=lambda p=port, n=served: backend_ready(p, n), timeout_seconds=int(os.environ.get("VLLM_START_TIMEOUT", SETTINGS.get("startup_timeout_seconds", 1800))))
+                print(f"vLLM {served}: READY")
+        start_gateway(wait=wait)
+    except Exception:
+        for state_path, last_path, state, expected, port, label in reversed(states):
+            try:
+                stop_service(state_path, last_path, expected=expected, port=port, label=f"vLLM {label}")
+            except Exception:
+                pass
+        raise
+
+
+def backend_ready(port: int, expected_model: str) -> bool:
+    status, _ = http_json(f"http://127.0.0.1:{port}/health", timeout=2)
+    if status != 200:
+        return False
+    status, models = http_json(f"http://127.0.0.1:{port}/v1/models", key=api_key(), timeout=3)
+    return status == 200 and any(item.get("id") == expected_model for item in (models or {}).get("data", []))
+
+
+def stop_pair() -> None:
+    stop_service(LITE_STATE_PATH, LITE_LAST_STATE_PATH, expected=("vllm", "serve"), port=int(SETTINGS["lite_port"]), label="vLLM lite")
+    stop_service(HEAVY_STATE_PATH, HEAVY_LAST_STATE_PATH, expected=("vllm", "serve"), port=int(SETTINGS["heavy_port"]), label="vLLM heavy")
+
+def stop_service(
+    state_path: Path,
+    last_path: Path,
+    *,
+    expected: tuple[str, ...],
+    port: int,
+    label: str,
+    timeout_seconds: int = 60,
+) -> bool:
+    state = read_state(state_path)
+    if state is None:
+        if port_open(port):
+            print(
+                f"{label} is listening on port {port}, but it was not started by this manager; refusing to stop it."
+            )
+        else:
+            print(f"{label} is not running under this manager.")
+        return False
+    owned_pids = matching_state_processes(state, expected)
+    pid = int(state.get("pid", 0))
+    if pid > 0 and process_start_ticks(pid) == str(state.get("process_start_ticks", "")):
+        owned_pids.append(pid)
+    owned_pids = sorted(set(owned_pids))
+    if not owned_pids:
+        if port_open(port):
+            raise ManagerError(
+                f"recorded {label} state is stale but port {port} is occupied by an unrecognized process; refusing to signal it"
+            )
+        archive_and_clear_state(state_path, last_path, state)
+        print(f"Removed stale {label} state; no process was signalled.")
+        return False
+
+    process_group = int(state.get("process_group", 0))
+    print(f"Stopping manager-owned {label} processes {owned_pids}...")
+    if process_group > 0:
+        try:
+            os.killpg(process_group, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    for owned_pid in owned_pids:
+        if owned_pid == os.getpid():
+            continue
+        try:
+            os.kill(owned_pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not matching_state_processes(state, expected) and not port_open(port):
+            archive_and_clear_state(state_path, last_path, state)
+            print(f"{label}: STOPPED")
+            return True
+        time.sleep(1)
+    raise ManagerError(
+        f"{label} did not stop within {timeout_seconds}s; no SIGKILL was sent. Inspect PID {pid} manually"
+    )
+
+
+def stop_model() -> None:
+    stopped = stop_service(
+        MODEL_STATE_PATH,
+        MODEL_LAST_STATE_PATH,
+        expected=("vllm", "serve"),
+        port=int(SETTINGS["vllm_port"]),
+        label="vLLM",
+    )
+    if stopped:
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used,memory.free",
+                    "--format=csv,noheader,nounits",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.stdout.strip():
+                print(f"GPU memory used, free (MiB): {result.stdout.strip()}")
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def stop_embedding() -> None:
+    stop_service(
+        EMBED_STATE_PATH,
+        EMBED_LAST_STATE_PATH,
+        expected=("vllm", "serve"),
+        port=int(SETTINGS["embedding_port"]),
+        label="vLLM embedding",
+    )
+
+
+def stop_gateway() -> None:
+    stop_service(
+        GATEWAY_STATE_PATH,
+        GATEWAY_LAST_STATE_PATH,
+        expected=("litellm",),
+        port=int(SETTINGS["litellm_port"]),
+        label="LiteLLM",
+        timeout_seconds=30,
+    )
+
+
+def print_status() -> None:
+    services = (
+        ("vLLM chat", MODEL_STATE_PATH, ("vllm", "serve"), int(SETTINGS["vllm_port"])),
+        ("vLLM heavy", HEAVY_STATE_PATH, ("vllm", "serve"), int(SETTINGS["heavy_port"])),
+        ("vLLM lite", LITE_STATE_PATH, ("vllm", "serve"), int(SETTINGS["lite_port"])),
+        ("vLLM embedding", EMBED_STATE_PATH, ("vllm", "serve"), int(SETTINGS["embedding_port"])),
+        ("LiteLLM", GATEWAY_STATE_PATH, ("litellm",), int(SETTINGS["litellm_port"])),
+    )
+    for label, path, expected, port in services:
+        state = read_state(path)
+        if state and state_process_is_live(state, expected):
+            detail = f" profile={state.get('profile')}" if state.get("profile") else ""
+            print(f"{label}: RUNNING pid={state['pid']} port={port}{detail} log={state['log']}")
+        elif port_open(port):
+            print(f"{label}: EXTERNAL process on port {port}; not managed here")
+        else:
+            print(f"{label}: STOPPED")
+
+
+def check_health() -> None:
+    chat_up = port_open(int(SETTINGS["vllm_port"]))
+    embed_up = port_open(int(SETTINGS["embedding_port"]))
+    lite_up = port_open(int(SETTINGS["lite_port"]))
+    if not chat_up and not lite_up and not embed_up:
+        raise ManagerError("no vLLM backend is listening")
+    if chat_up:
+        heavy_state = read_state(HEAVY_STATE_PATH)
+        chat_ready = backend_ready(int(SETTINGS["heavy_port"]), str(SETTINGS["heavy_model_name"])) if heavy_state and state_process_is_live(heavy_state, ("vllm", "serve")) else vllm_ready()
+        if not chat_ready:
+            raise ManagerError("vLLM chat health/model-list check failed")
+        print("vLLM chat /health and /v1/models: PASS")
+    if lite_up:
+        if not backend_ready(int(SETTINGS["lite_port"]), str(SETTINGS["lite_model_name"])):
+            raise ManagerError("vLLM lite health/model-list check failed")
+        print("vLLM lite /health and /v1/models: PASS")
+    if embed_up:
+        if not embedding_ready():
+            raise ManagerError("vLLM embedding health/model-list check failed")
+        print("vLLM embedding /health and /v1/models: PASS")
+    if port_open(int(SETTINGS["litellm_port"])):
+        if not gateway_ready():
+            raise ManagerError("LiteLLM health check failed")
+        print("LiteLLM health: PASS")
+    else:
+        print("LiteLLM: not running")
+
+
+def chat(prompt: str, *, model: str = "qwen-chat", direct: bool = False, max_tokens: int = 256) -> None:
+    state_path = LITE_STATE_PATH if model == str(SETTINGS["lite_model_name"]) else HEAVY_STATE_PATH if model in {str(SETTINGS["heavy_model_name"]), str(SETTINGS["served_model_name"])} else MODEL_STATE_PATH
+    state = read_state(state_path)
+    if not state or not state_process_is_live(state, ("vllm", "serve")):
+        raise ManagerError("no manager-owned vLLM model is running")
+    port = int(state.get("port", SETTINGS["vllm_port"]) if direct else SETTINGS["litellm_port"])
+    if not direct and not gateway_ready():
+        raise ManagerError("LiteLLM is not ready; start it or use chat --direct")
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    payload = {
+        "model": state.get("served_model_name", model) if direct else model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+    }
+    _, response = http_json(url, key=api_key(), payload=payload, timeout=300)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = Path(state["log"]).parent / f"chat_{timestamp}.json"
+    output_path.write_text(json.dumps(response, indent=2) + "\n", encoding="utf-8")
+    message = ((response or {}).get("choices") or [{}])[0].get("message") or {}
+    content = message.get("content") or message.get("reasoning_content") or message.get("reasoning")
+    if not content:
+        raise ManagerError(f"chat returned no content; response saved to {output_path}")
+    print(content)
+    print(f"\nResponse: {output_path}")
+
+
+def embedding_request(*, direct: bool = False) -> None:
+    state = read_state(EMBED_STATE_PATH)
+    if not state or not state_process_is_live(state, ("vllm", "serve")):
+        raise ManagerError("no manager-owned embedding backend is running")
+    port = int(SETTINGS["embedding_port"] if direct else SETTINGS["litellm_port"])
+    if not direct and not gateway_ready():
+        raise ManagerError("LiteLLM is not ready; use embed test --direct")
+    payload = {
+        "model": SETTINGS["served_embedding_name"],
+        "input": ["A short document retrieval test."],
+    }
+    _, response = http_json(
+        f"http://127.0.0.1:{port}/v1/embeddings",
+        key=api_key(),
+        payload=payload,
+        timeout=60,
+    )
+    data = (response or {}).get("data") or []
+    if not data or not data[0].get("embedding"):
+        raise ManagerError("embedding response did not contain a non-empty vector")
+    print(f"Embedding: PASS ({len(data[0]['embedding'])} dimensions)")
+
+
+def show_logs(lines: int, follow: bool, gateway: bool) -> None:
+    current = GATEWAY_STATE_PATH if gateway else MODEL_STATE_PATH
+    previous = GATEWAY_LAST_STATE_PATH if gateway else MODEL_LAST_STATE_PATH
+    state = read_state(current) or read_state(previous)
+    if not state:
+        raise ManagerError("no log has been recorded yet")
+    path = Path(state["log"])
+    if follow:
+        os.execvp("tail", ["tail", "-n", str(lines), "-f", str(path)])
+    print(tail(path, lines), end="")
+
+
+def validate_registry() -> None:
+    errors: list[str] = []
+    expected_served = str(SETTINGS["served_model_name"])
+    expected_port = str(SETTINGS["vllm_port"])
+    orders: set[int] = set()
+    for key, item in MODELS.items():
+        command = item.get("command")
+        if not isinstance(command, list) or command[:4] != ["uv", "run", "vllm", "serve"]:
+            errors.append(f"{key}: command must begin with uv run vllm serve")
+            continue
+        if command.count("{model}") != 1 or command.count("{api_key}") != 1:
+            errors.append(f"{key}: command needs exactly one model and API-key placeholder")
+        if argument_value(command, "--served-model-name") != expected_served:
+            errors.append(f"{key}: served model name must be {expected_served}")
+        if argument_value(command, "--port") != expected_port:
+            errors.append(f"{key}: port must be {expected_port}")
+        if "--tool-call-parser" in command and "--enable-auto-tool-choice" not in command:
+            errors.append(f"{key}: tool parser requires --enable-auto-tool-choice")
+        if item.get("source") not in {"model_id", "local_snapshot"}:
+            errors.append(f"{key}: invalid source")
+        order = item.get("order")
+        if not isinstance(order, int) or order in orders:
+            errors.append(f"{key}: order must be a unique integer")
+        else:
+            orders.add(order)
+    embed_orders: set[int] = set()
+    for key, item in EMBEDDINGS.items():
+        command = item.get("command")
+        if not isinstance(command, list) or command[:4] != ["uv", "run", "vllm", "serve"]:
+            errors.append(f"{key}: embedding command must begin with uv run vllm serve")
+            continue
+        if command.count("{model}") != 1 or command.count("{api_key}") != 1:
+            errors.append(f"{key}: embedding command needs one model and API-key placeholder")
+        if argument_value(command, "--served-model-name") != str(SETTINGS["served_embedding_name"]):
+            errors.append(f"{key}: embedding served model name is incorrect")
+        if argument_value(command, "--port") != str(SETTINGS["embedding_port"]):
+            errors.append(f"{key}: embedding port is incorrect")
+        order = item.get("order")
+        if not isinstance(order, int) or order in embed_orders:
+            errors.append(f"{key}: embedding order must be unique")
+        else:
+            embed_orders.add(order)
+    try:
+        config_text = LITELLM_CONFIG_PATH.read_text(encoding="utf-8")
+        required = ("heavy-model", "lite-model", "os.environ/VLLM_HEAVY_API_BASE", "os.environ/VLLM_LITE_API_BASE", "master_key")
+        if any(item not in config_text for item in required):
+            errors.append("LiteLLM config is missing heavy/lite routing or shared authentication")
+        if int(SETTINGS["heavy_port"]) == int(SETTINGS["lite_port"]):
+            errors.append("heavy and lite ports must be distinct")
+        if not 0 < float(SETTINGS.get("gpu_memory_budget", 0.95)) <= 1.0:
+            errors.append("gpu_memory_budget must be between 0 and 1")
+        if str(SETTINGS.get("heavy_gpu")) == str(SETTINGS.get("lite_gpu")):
+            errors.append("heavy_gpu and lite_gpu must be different")
+    except OSError as exc:
+        errors.append(f"cannot read LiteLLM config: {exc}")
+    if errors:
+        raise ManagerError("registry validation failed:\n- " + "\n- ".join(errors))
+    print(f"Registry: PASS ({len(MODELS)} complete model commands)")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="vllm-model",
+        description="Manage one or two exact vLLM model profiles behind a stable LiteLLM endpoint.",
+    )
+    sub = parser.add_subparsers(dest="action", required=True)
+    sub.add_parser("list", help="list model profiles and critical flags")
+    embed = sub.add_parser("embed", help="manage standalone embedding profiles")
+    embed_sub = embed.add_subparsers(dest="embed_action", required=True)
+    embed_sub.add_parser("list", help="list embedding profiles")
+    embed_show = embed_sub.add_parser("show", help="print one embedding command")
+    embed_show.add_argument("model")
+    embed_start = embed_sub.add_parser("start", help="start an embedding backend")
+    embed_start.add_argument("model")
+    embed_start.add_argument("--no-wait", action="store_true")
+    embed_start.add_argument("--no-gateway", action="store_true")
+    embed_sub.add_parser("stop", help="stop the manager-owned embedding backend")
+    embed_test = embed_sub.add_parser("test", help="test /v1/embeddings")
+    embed_test.add_argument("--direct", action="store_true")
+    show = sub.add_parser("show", help="print one exact copyable vLLM command")
+    show.add_argument("model")
+    pair = sub.add_parser("start-pair", help="start heavy and lite vLLM backends behind LiteLLM")
+    pair.add_argument("heavy_model")
+    pair.add_argument("lite_model")
+    pair.add_argument("--no-wait", action="store_true")
+    start = sub.add_parser("start", help="start vLLM and then ensure LiteLLM is running")
+    start.add_argument("model")
+    start.add_argument("--no-wait", action="store_true")
+    start.add_argument("--no-gateway", action="store_true")
+    switch = sub.add_parser("switch", help="stop the managed vLLM model and start another")
+    switch.add_argument("model")
+    switch.add_argument("--no-wait", action="store_true")
+    sub.add_parser("stop-pair", help="stop the manager-owned heavy and lite backends")
+    sub.add_parser("stop", help="stop only the manager-owned vLLM model")
+    sub.add_parser("shutdown", help="stop manager-owned vLLM and LiteLLM processes")
+    sub.add_parser("status", help="show vLLM and LiteLLM process ownership/status")
+    sub.add_parser("health", help="check both vLLM and LiteLLM")
+    chat_parser = sub.add_parser("chat", help="send a small chat through LiteLLM")
+    chat_parser.add_argument("prompt", nargs="?", default="Reply briefly and confirm that the model is running.")
+    chat_parser.add_argument("--model", default="qwen-chat", help="model alias: qwen-chat, heavy-model, or lite-model")
+    chat_parser.add_argument("--direct", action="store_true", help="bypass LiteLLM and call vLLM")
+    chat_parser.add_argument("--max-tokens", type=int, default=256)
+    logs = sub.add_parser("logs", help="show the current or most recent log")
+    logs.add_argument("--lines", type=int, default=80)
+    logs.add_argument("--follow", action="store_true")
+    logs.add_argument("--gateway", action="store_true")
+    gateway = sub.add_parser("gateway", help="manage only the LiteLLM gateway")
+    gateway.add_argument("operation", choices=("start", "stop"))
+    sub.add_parser("validate", help="validate registry invariants without starting a model")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if args.action == "list":
+        print("PROFILE                         STATUS       CONTEXT  TOOL PARSER    REASONING")
+        for key, item in ordered_profiles(MODELS):
+            command = item["command"]
+            print(
+                f"{key:<31} {item['status']:<12} "
+                f"{argument_value(command, '--max-model-len'):<8} "
+                f"{argument_value(command, '--tool-call-parser'):<14} "
+                f"{argument_value(command, '--reasoning-parser')}"
+            )
+        return 0
+    if args.action == "embed":
+        if args.embed_action == "list":
+            print("PROFILE                         STATUS       CONTEXT  MEMORY")
+            for key, item in ordered_profiles(EMBEDDINGS):
+                command = item["command"]
+                print(
+                    f"{key:<31} {item['status']:<12} "
+                    f"{argument_value(command, '--max-model-len'):<8} "
+                    f"{argument_value(command, '--gpu-memory-utilization')}"
+                )
+            return 0
+        if args.embed_action == "show":
+            selected = embedding_profile(args.model)
+            print(f"# {embedding_profile_key(selected)} — {selected['model_id']}")
+            print(printable_command(selected))
+            return 0
+        if args.embed_action == "start":
+            start_embedding(
+                args.model,
+                wait=not args.no_wait,
+                with_gateway=not args.no_gateway,
+            )
+            return 0
+        if args.embed_action == "stop":
+            stop_embedding()
+            return 0
+        if args.embed_action == "test":
+            embedding_request(direct=args.direct)
+            return 0
+    if args.action == "show":
+        selected = profile(args.model)
+        print(f"# {profile_key(selected)} — {selected['model_id']}")
+        print(printable_command(selected))
+        return 0
+    if args.action == "start-pair":
+        start_pair(args.heavy_model, args.lite_model, wait=not args.no_wait)
+        return 0
+    if args.action == "start":
+        start_model(args.model, wait=not args.no_wait, with_gateway=not args.no_gateway)
+        return 0
+    if args.action == "switch":
+        stop_model()
+        start_model(args.model, wait=not args.no_wait, with_gateway=True)
+        return 0
+    if args.action == "stop-pair":
+        stop_pair()
+        return 0
+    if args.action == "stop":
+        stop_model()
+        return 0
+    if args.action == "shutdown":
+        stop_pair()
+        stop_model()
+        stop_embedding()
+        stop_gateway()
+        return 0
+    if args.action == "status":
+        print_status()
+        return 0
+    if args.action == "health":
+        check_health()
+        return 0
+    if args.action == "chat":
+        chat(args.prompt, model=args.model, direct=args.direct, max_tokens=args.max_tokens)
+        return 0
+    if args.action == "logs":
+        show_logs(args.lines, args.follow, args.gateway)
+        return 0
+    if args.action == "gateway":
+        start_gateway() if args.operation == "start" else stop_gateway()
+        return 0
+    if args.action == "validate":
+        validate_registry()
+        return 0
+    raise ManagerError(f"unknown action {args.action}")
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted; any already-started service was left running. Use status/stop/shutdown.", file=sys.stderr)
+        raise SystemExit(130)
+    except ManagerError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)
