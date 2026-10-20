@@ -17,15 +17,15 @@ dependencies = [
 
 [project.optional-dependencies]
 multimodal = [
-  "chromadb>=0.5,<1",
+  "chromadb>=0.5,<2",
   "google-generativeai>=0.8,<1",
-  "pillow>=10,<12",
+  "pillow>=10,<13",
   "torch>=2.4,<3",
-  "transformers>=4.45,<5",
+  "transformers>=4.45,<6",
 ]
 
 dev = [
-  "pytest>=8,<9",
+  "pytest>=8,<10",
 ]
 
 [project.scripts]
